@@ -230,7 +230,7 @@ async function performSwapUSDT(logger) {
 
   // Helper function to generate random amount with fixed decimals
   function getRandomAmount(min, max) {
-    // Generate random number with max 8 decimal places
+    // Generate random number with max 5 decimal places
     const randomEth = (Math.random() * (max - min) + min).toFixed(5);
     return e.parseEther(randomEth);
   }
@@ -462,6 +462,18 @@ async function addLpUSDT(logger) {
 }
 
 async function randomTransfer(logger) {
+  const maxRetries = 2;
+  const retryDelay = 2000;
+  const minTransactionDelay = 1000; // Minimum delay in ms
+  const maxTransactionDelay = 5000; // Minimum delay in ms
+
+ // Helper function to generate random amount with fixed decimals
+  function getRandomAmount(min, max) {
+    // Generate random number with max 6 decimal places
+    const randomEth = (Math.random() * (max - min) + min).toFixed(6);
+    return e.parseEther(randomEth);
+  }
+
   const transferTasks = global.selectedWallets?.map(async (a) => {
     let { privatekey: t, name: $ } = a;
     if (!t) {
@@ -471,30 +483,63 @@ async function randomTransfer(logger) {
     try {
       let provider = getProvider();
       let wallet = new e.Wallet(t, provider);
-      let balance = await provider.getBalance(wallet.address);
-      let amount = e.parseEther("0.000001");
+      let address = wallet.address;
+      let balance = await provider.getBalance(address);
+      let balanceEth = e.formatEther(balance);
+      logger(`System | ${$} | Balance: ${balanceEth} PHRS`);
 
-      if (balance < amount * BigInt(global.maxTransaction)) {
+      // Initial amount calculation for balance check
+      let maxAmount = getRandomAmount(0.0001, 0.0003); // Range amount 0.0001-0.0003 PHRS
+      let gasPrice = await provider.getFeeData();
+      let estimatedGasLimit = BigInt(21000);
+      let gasCost = gasPrice.gasPrice * estimatedGasLimit;
+      let totalCost = maxAmount * BigInt(global.maxTransaction) + gasCost * BigInt(global.maxTransaction);
+
+      if (balance < totalCost) {
         logger(`System | ${$} | Insufficient balance for ${global.maxTransaction} transfers`);
         return;
       }
 
       for (let l = 1; l <= global.maxTransaction; l++) {
+        // Generate new random amount for each transaction
+        let amount = getRandomAmount(0.0001, 0.0003);
+        let amountStr = e.formatEther(amount);
         let randomWallet = e.Wallet.createRandom();
-        logger(`System | ${$} | Transfer 0.000001 PHRS to ${randomWallet.address} (${l}/${global.maxTransaction})`);
-        try {
-          let tx = await wallet.sendTransaction({
-            to: randomWallet.address,
-            value: amount,
-            gasLimit: 21000,
-          });
-          await tx.wait(1);
-          logger(`System | ${$} | Transfer Confirmed: ${chalk.green(pharos.explorer.tx(tx.hash))}`);
-          await etc.delay(1000);
-        } catch (error) {
-          logger(`System | ${$} | Transfer Error: ${chalk.red(error.message)}`);
-          break;
+        
+        logger(`System | ${$} | Transfer ${amountStr} PHRS to ${randomWallet.address} (${l}/${global.maxTransaction})`);
+        
+        let success = false;
+        let attempt = 0;
+
+        while (!success && attempt < maxRetries) {
+          try {
+            attempt++;
+            let tx = {
+              to: randomWallet.address,
+              value: amount,
+              gasLimit: estimatedGasLimit * 12n / 10n, // add 20% buffer
+            };
+
+            let txResponse = await wallet.sendTransaction(tx);
+            let receipt = await txResponse.wait(1);
+            logger(`System | ${$} | Transfer Confirmed: ${chalk.green(pharos.explorer.tx(txResponse.hash))}`);
+            success = true;
+          } catch (u) {
+            if (attempt < maxRetries) {
+              logger(`System | ${$} | Transfer attempt ${attempt} failed: ${chalk.yellow(u.message)}`);
+              await etc.delay(retryDelay);
+              continue;
+            }
+            logger(`System | ${$} | Transfer failed: ${chalk.red(u.message)}`);
+            break;
+          }
         }
+        if (!success) break;
+        
+        // Random delay between transactions
+        const randomDelay = Math.floor(Math.random() * (maxTransactionDelay - minTransactionDelay + 1)) + minTransactionDelay;
+        logger(`System | ${$} | Menunggu delay acak selama ${randomDelay/1000} detik sebelum transaksi berikutnya...`);
+        await etc.delay(randomDelay);
       }
     } catch (error) {
       logger(`System | ${$} | Error: ${chalk.red(error.message)}`);
