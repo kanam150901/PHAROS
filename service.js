@@ -225,7 +225,15 @@ async function performSwapUSDC(logger) {
 async function performSwapUSDT(logger) {
   const maxRetries = 2;
   const retryDelay = 2000;
-  const transactionDelay = 1000;
+  const minTransactionDelay = 1000; // Minimum delay in ms
+  const maxTransactionDelay = 5000; // Maximum delay in ms
+
+  // Helper function to generate random amount with fixed decimals
+  function getRandomAmount(min, max) {
+    // Generate random number with max 8 decimal places
+    const randomEth = (Math.random() * (max - min) + min).toFixed(5);
+    return e.parseEther(randomEth);
+  }
 
   const swapTasks = global.selectedWallets?.map(async (a) => {
     let { privatekey: t, name: $ } = a;
@@ -242,13 +250,14 @@ async function performSwapUSDT(logger) {
       let balanceEth = e.formatEther(balance);
       logger(`System | ${$} | Balance: ${balanceEth} PHRS`);
 
-      let amount = getRandomAmount(0.0001, 0.0003);
-      let amountStr = e.formatEther(amount);
+      // Initial amount calculation for balance check
+      let initialAmount = getRandomAmount(0.001, 0.003);
+      let initialAmountStr = e.formatEther(initialAmount);
 
       let gasPrice = await provider.getFeeData();
       let estimatedGasLimit = BigInt(200000);
       let gasCost = gasPrice.gasPrice * estimatedGasLimit;
-      let totalCost = amount + gasCost * BigInt(global.maxTransaction);
+      let totalCost = initialAmount + gasCost * BigInt(global.maxTransaction);
 
       if (balance < totalCost) {
         logger(`System | ${$} | Insufficient balance for ${global.maxTransaction} swaps`);
@@ -256,20 +265,26 @@ async function performSwapUSDT(logger) {
       }
 
       let tokenPair = contract.WPHRS.slice(2).padStart(64, "0") + contract.USDT.slice(2).padStart(64, "0");
-      let amountHex = amount.toString(16).padStart(64, "0");
-      let callData =
-        "0x04e45aaf" +
-        tokenPair +
-        "0000000000000000000000000000000000000000000000000000000000000bb8" +
-        address.toLowerCase().slice(2).padStart(64, "0") +
-        amountHex +
-        "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
       let deadline = Math.floor(Date.now() / 1e3) + 600;
       let contractAbi = ["function multicall(uint256 deadline, bytes[] calldata data) payable"];
       let swapContract = new e.Contract(contract.SWAP, contractAbi, wallet);
-      let encodedData = swapContract.interface.encodeFunctionData("multicall", [deadline, [callData]]);
 
       for (let w = 1; w <= global.maxTransaction; w++) {
+        // Generate new random amount for each transaction
+        let amount = getRandomAmount(0.001, 0.003);
+        let amountStr = e.formatEther(amount);
+        let amountHex = amount.toString(16).padStart(64, "0");
+        
+        let callData =
+          "0x04e45aaf" +
+          tokenPair +
+          "0000000000000000000000000000000000000000000000000000000000000bb8" +
+          address.toLowerCase().slice(2).padStart(64, "0") +
+          amountHex +
+          "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+        
+        let encodedData = swapContract.interface.encodeFunctionData("multicall", [deadline, [callData]]);
+        
         logger(`System | ${$} | Swap ${amountStr} PHRS to USDT (${w}/${global.maxTransaction})`);
         let success = false;
         let attempt = 0;
@@ -299,7 +314,11 @@ async function performSwapUSDT(logger) {
           }
         }
         if (!success) break;
-        await etc.delay(transactionDelay);
+        
+        // Random delay between transactions
+        const randomDelay = Math.floor(Math.random() * (maxTransactionDelay - minTransactionDelay + 1)) + minTransactionDelay;
+        logger(`System | ${$} | Waiting ${randomDelay/1000}s before next swap...`);
+        await etc.delay(randomDelay);
       }
     } catch (u) {
       logger(`System | ${$} | Error: ${chalk.red(u.message)}`);
@@ -308,7 +327,6 @@ async function performSwapUSDT(logger) {
 
   await Promise.all(swapTasks);
 }
-
 async function checkBalanceAndApprove(wallet, tokenAddress, spender, logger) {
   let tokenContract = new e.Contract(tokenAddress, abi.ERC20, wallet);
   let allowance = await tokenContract.allowance(wallet.address, spender);
